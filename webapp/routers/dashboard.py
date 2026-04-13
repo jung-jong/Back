@@ -12,18 +12,23 @@ from src.analytics.keyword_stat_service import extract_question_keywords
 from src.models import (
     AIIntervention,
     ChatMessage,
+    ChatMessageSource,
     ChatSession,
+    CourseDocument,
     CourseKeywordStat,
     CourseMessage,
     Enrollment,
     NotificationRead,
     Quest,
+    QuestQuestion,
+    QuestQuestionChoice,
     QuizAttempt,
+    StudentQuestAnswer,
     StudentQuest,
     User,
     WeakConcept,
 )
-from src.models.enums import EnrollmentStatus, SenderType, StudentQuestStatus, UserRole
+from src.models.enums import EnrollmentStatus, Rank, RecentSourceType, SenderType, StudentQuestStatus, UserRole
 from webapp.routers.courses import get_course_for_user
 
 router = APIRouter(prefix="/courses/{course_id}", tags=["analytics"])
@@ -77,6 +82,14 @@ def rank_progress(total_xp: int) -> tuple[str, int, int, int]:
     return "C", total_xp, max(600 - total_xp, 0), total_xp
 
 
+def rank_enum_for_total(total_xp: int) -> Rank:
+    if total_xp >= 1200:
+        return Rank.A
+    if total_xp >= 600:
+        return Rank.B
+    return Rank.C
+
+
 async def mark_notification_read(
     session: AsyncSession,
     user_id: int,
@@ -91,6 +104,115 @@ async def mark_notification_read(
         ),
         {"user_id": user_id, "course_id": course_id, "notification_key": key},
     )
+
+
+GENERIC_WEAK_CONCEPTS = {
+    "data",
+    "file",
+    "gov",
+    "line",
+    "데이터",
+    "데이터의",
+    "개방",
+}
+
+
+async def build_quest_weak_point_detail(
+    session: AsyncSession,
+    item: WeakConcept,
+) -> dict | None:
+    if item.recent_source_type != RecentSourceType.QUEST or not item.recent_source_ref_id:
+        return None
+    result = await session.execute(
+        select(StudentQuestAnswer, QuestQuestion, Quest)
+        .join(QuestQuestion, StudentQuestAnswer.quest_question_id == QuestQuestion.quest_question_id)
+        .join(Quest, QuestQuestion.quest_id == Quest.quest_id)
+        .where(
+            StudentQuestAnswer.student_quest_id == item.recent_source_ref_id,
+            StudentQuestAnswer.is_correct.is_(False),
+        )
+        .order_by(QuestQuestion.question_order),
+    )
+    rows = result.all()
+    if not rows:
+        return None
+    answer, question, quest = next(
+        (
+            row
+            for row in rows
+            if item.concept_name.strip()
+            and item.concept_name.strip() in row[1].question_text
+        ),
+        rows[0],
+    )
+    choices_result = await session.execute(
+        select(QuestQuestionChoice)
+        .where(QuestQuestionChoice.quest_question_id == question.quest_question_id)
+        .order_by(QuestQuestionChoice.choice_order),
+    )
+    choices = choices_result.scalars().all()
+    selected_choice = next(
+        (choice for choice in choices if choice.quest_question_choice_id == answer.selected_choice_id),
+        None,
+    )
+    correct_choice = next((choice for choice in choices if choice.is_correct), None)
+    selected_text = selected_choice.choice_text if selected_choice else (answer.answer_text or "미응답")
+    correct_text = correct_choice.choice_text if correct_choice else (question.correct_answer_text or "")
+    summary_parts = [
+        f"문항: {question.question_text}",
+        f"내 답: {selected_text}",
+    ]
+    if correct_text:
+        summary_parts.append(f"정답: {correct_text}")
+    if question.explanation:
+        summary_parts.append(f"해설: {question.explanation}")
+    return {
+        "keyword": question.question_text,
+        "summary": "\n".join(summary_parts),
+        "material": quest.title,
+        "sourceType": "QUEST",
+        "sourceId": str(item.recent_source_ref_id),
+        "question": question.question_text,
+        "selectedAnswer": selected_text,
+        "correctAnswer": correct_text,
+        "explanation": question.explanation or "",
+    }
+
+
+async def build_chat_weak_point_detail(
+    session: AsyncSession,
+    item: WeakConcept,
+) -> dict | None:
+    if item.recent_source_type != RecentSourceType.CHAT or not item.recent_source_ref_id:
+        return None
+    message = await session.get(ChatMessage, item.recent_source_ref_id)
+    if message is None:
+        return None
+    source_result = await session.execute(
+        select(ChatMessageSource, CourseDocument)
+        .join(CourseDocument, ChatMessageSource.course_document_id == CourseDocument.course_document_id)
+        .where(ChatMessageSource.chat_message_id == item.recent_source_ref_id)
+        .limit(1),
+    )
+    source_row = source_result.first()
+    material = ""
+    if source_row:
+        source, document = source_row
+        if source.page_from:
+            material = f"{document.title} {source.page_from}p"
+        else:
+            material = document.title
+    return {
+        "keyword": item.concept_name,
+        "summary": f"{item.concept_name} 개념을 다시 확인해 보세요.",
+        "material": material,
+        "sourceType": "CHAT",
+        "sourceId": str(item.recent_source_ref_id),
+        "question": "",
+        "selectedAnswer": "",
+        "correctAnswer": "",
+        "explanation": message.message_text[:500],
+    }
 
 
 @router.get("/analytics")
@@ -330,7 +452,13 @@ async def get_my_course_stats(
         ).where(QuizAttempt.enrollment_id == enrollment.enrollment_id),
     )
     quiz_score, quiz_total = quiz_result.one()
-    grade, xp, xp_to_next, total_xp = rank_progress(enrollment.current_xp or 0)
+    total_xp = enrollment.current_xp or 0
+    calculated_rank = rank_enum_for_total(total_xp)
+    if enrollment.current_rank != calculated_rank:
+        enrollment.current_rank = calculated_rank
+        await session.flush()
+        await session.commit()
+    grade, xp, xp_to_next, total_xp = rank_progress(total_xp)
     accuracy_total = int(quest_total or 0) + int(quiz_total or 0)
     accuracy_score = int(quest_score or 0) + int(quiz_score or 0)
     return {
@@ -355,20 +483,51 @@ async def get_my_weak_points(
     result = await session.execute(
         select(WeakConcept)
         .where(WeakConcept.enrollment_id == enrollment.enrollment_id)
-        .order_by(WeakConcept.error_count.desc())
+        .order_by(
+            case((WeakConcept.recent_source_type == RecentSourceType.QUEST, 0), else_=1),
+            WeakConcept.error_count.desc(),
+        )
         .limit(20),
     )
-    return [
-        {
-            "id": str(item.weak_concept_id),
-            "keyword": item.concept_name,
-            "wrongCount": item.error_count or 0,
-            "lastWrong": getattr(item.recent_source_type, "value", ""),
-            "summary": f"{item.concept_name} 개념을 다시 확인해 보세요.",
-            "material": "",
-        }
-        for item in result.scalars().all()
-    ]
+    weak_points = []
+    for item in result.scalars().all():
+        if (
+            item.recent_source_type == RecentSourceType.CHAT
+            and item.concept_name.strip().lower() in GENERIC_WEAK_CONCEPTS
+        ):
+            continue
+        detail = await build_quest_weak_point_detail(session, item)
+        if detail is None:
+            detail = await build_chat_weak_point_detail(session, item)
+        if detail is None:
+            detail = {
+                "keyword": item.concept_name,
+                "summary": f"{item.concept_name} 개념을 다시 확인해 보세요.",
+                "material": "",
+                "sourceType": getattr(item.recent_source_type, "value", ""),
+                "sourceId": str(item.recent_source_ref_id or ""),
+                "question": "",
+                "selectedAnswer": "",
+                "correctAnswer": "",
+                "explanation": "",
+            }
+        weak_points.append(
+            {
+                "id": str(item.weak_concept_id),
+                "keyword": detail["keyword"],
+                "wrongCount": item.error_count or 0,
+                "lastWrong": getattr(item.recent_source_type, "value", ""),
+                "summary": detail["summary"],
+                "material": detail["material"],
+                "sourceType": detail["sourceType"],
+                "sourceId": detail["sourceId"],
+                "question": detail["question"],
+                "selectedAnswer": detail["selectedAnswer"],
+                "correctAnswer": detail["correctAnswer"],
+                "explanation": detail["explanation"],
+            },
+        )
+    return weak_points
 
 
 @router.get("/notifications")
