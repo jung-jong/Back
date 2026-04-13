@@ -12,7 +12,7 @@ Custom-TA는 강의 자료를 기반으로 학생 질문에 답변하고, 학습
 
 ## AI 협업 산출물
 
-본 프로젝트는 공모전 심사 기준에 맞춰 AI와의 기획, 설계, 구현 협업 과정을 문서로 남겼습니다.
+본 프로젝트는 AI와의 기획, 설계, 구현 협업 과정을 문서로 남겼습니다.
 
 - `docs/AI_COLLABORATION_GUIDE.md`: AI 개발 에이전트 협업 지침서
 - `docs/PRODUCT_REQUIREMENTS.md`: 제품 기획 및 기능 정의서

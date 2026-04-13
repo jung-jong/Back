@@ -162,7 +162,7 @@ Authorization: Bearer <JWT_TOKEN>
 
 ## 운영 및 배포 방향
 
-현재 공모전 시연 환경은 다음 구조를 사용합니다.
+현재 시연 환경은 다음 구조를 사용합니다.
 
 ```text
 Vercel Frontend
@@ -172,4 +172,3 @@ Vercel Frontend
 ```
 
 운영 전환 시에는 임시 Cloudflare quick tunnel 대신 고정 도메인 기반 HTTPS 또는 정식 Cloudflare Tunnel named tunnel을 사용하는 것을 권장합니다.
-
