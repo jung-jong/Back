@@ -40,7 +40,10 @@ async def assign_quest_to_active_enrollments(
         Enrollment.status == EnrollmentStatus.ACTIVE,
     )
     if quest.target_rule_type == TargetRuleType.RANK and quest.target_rule_value:
-        query = query.where(Enrollment.current_rank == quest.target_rule_value)
+        ranks = parse_rank_values(quest.target_rule_value)
+        if not ranks:
+            return []
+        query = query.where(Enrollment.current_rank.in_(ranks))
     elif quest.target_rule_type == TargetRuleType.SELECTED and quest.target_rule_value:
         enrollment_ids = parse_selected_enrollment_ids(quest.target_rule_value)
         if not enrollment_ids:
@@ -69,6 +72,15 @@ async def assign_quest_to_active_enrollments(
         session.add(student_quest)
         assigned.append(student_quest)
     return assigned
+
+
+def parse_rank_values(value: str) -> list[Rank]:
+    ranks = []
+    for item in value.replace("·", ",").replace(".", ",").split(","):
+        normalized = item.strip().upper()
+        if normalized in {"A", "B", "C"}:
+            ranks.append(Rank(normalized))
+    return ranks
 
 
 async def grade_student_quest(

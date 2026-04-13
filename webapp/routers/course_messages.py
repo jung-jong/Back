@@ -61,11 +61,12 @@ def is_message_targeted_to_enrollment(
 
     values = {
         item.strip().upper()
-        for item in (message.target_rule_value or "").split(",")
+        for item in (message.target_rule_value or "").replace("·", ",").replace(".", ",").split(",")
         if item.strip()
     }
     if target_rule_type == TargetRuleType.RANK:
-        return str(enrollment.current_rank or "").upper() in values
+        rank = getattr(enrollment.current_rank, "value", enrollment.current_rank)
+        return str(rank or "").upper() in values
     if target_rule_type == TargetRuleType.SELECTED:
         return str(enrollment.enrollment_id) in values
     return False

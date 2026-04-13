@@ -149,9 +149,29 @@ def parse_scope_weeks(scope: str | None) -> tuple[int | None, int | None]:
     return start, end
 
 
+def parse_target_group(value: str | None) -> tuple[TargetRuleType, str | None]:
+    text_value = (value or "").strip().upper()
+    if not text_value or "전체" in text_value or "ALL" in text_value:
+        return TargetRuleType.ALL, None
+
+    ranks = []
+    for rank in ("A", "B", "C"):
+        if re.search(rf"(?<![A-Z0-9]){rank}(?![A-Z0-9])", text_value):
+            ranks.append(rank)
+    if ranks:
+        return TargetRuleType.RANK, ",".join(ranks)
+
+    return TargetRuleType.ALL, None
+
+
 def target_group_text(quest: Quest) -> str:
     if quest.target_rule_type == TargetRuleType.RANK and quest.target_rule_value:
-        return f"{quest.target_rule_value} 등급 학생"
+        ranks = ",".join(
+            rank
+            for rank in quest.target_rule_value.replace("·", ",").replace(".", ",").split(",")
+            if rank.strip().upper() in {"A", "B", "C"}
+        )
+        return f"{ranks or quest.target_rule_value} 등급 학생"
     if quest.target_rule_type == TargetRuleType.SELECTED:
         return "선택 학생"
     return "전체 수강생"
@@ -561,6 +581,7 @@ async def create_course_quest(
 ) -> dict:
     await get_instructor_course(session, course_id, current_user)
     scope_week_start, scope_week_end = parse_scope_weeks(payload.scope)
+    target_rule_type, target_rule_value = parse_target_group(payload.targetGroup)
     quest = Quest(
         course_id=course_id,
         creator_type=QuestCreatorType.MANUAL,
@@ -571,7 +592,8 @@ async def create_course_quest(
         scope_week_end=scope_week_end,
         difficulty=difficulty_to_db(payload.difficulty),
         xp_reward=payload.xp,
-        target_rule_type=TargetRuleType.ALL,
+        target_rule_type=target_rule_type,
+        target_rule_value=target_rule_value,
     )
     session.add(quest)
     await session.flush()
@@ -601,6 +623,7 @@ async def update_course_quest(
     quest.scope_week_end = scope_week_end
     quest.difficulty = difficulty_to_db(payload.difficulty)
     quest.xp_reward = payload.xp
+    quest.target_rule_type, quest.target_rule_value = parse_target_group(payload.targetGroup)
     await replace_front_questions(session, quest, payload.questions or fallback_questions(payload))
     await session.flush()
 
