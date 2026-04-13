@@ -415,7 +415,15 @@ async def list_course_quests(
         .order_by(Quest.created_at.desc())
     )
     if current_user.role == UserRole.STUDENT:
-        query = query.where(Quest.status == QuestStatus.SENT)
+        query = (
+            query.join(StudentQuest, StudentQuest.quest_id == Quest.quest_id)
+            .join(Enrollment, StudentQuest.enrollment_id == Enrollment.enrollment_id)
+            .where(
+                Quest.status == QuestStatus.SENT,
+                Enrollment.student_id == current_user.user_id,
+                Enrollment.course_id == course_id,
+            )
+        )
 
     result = await session.execute(query)
     return [await quest_response(session, quest, current_user) for quest in result.scalars().all()]
@@ -540,8 +548,19 @@ async def get_quest_content(
     quest = result.scalar_one_or_none()
     if quest is None:
         raise HTTPException(status_code=404, detail="퀘스트를 찾을 수 없습니다.")
-    if current_user.role == UserRole.STUDENT and quest.status != QuestStatus.SENT:
-        raise HTTPException(status_code=404, detail="퀘스트를 찾을 수 없습니다.")
+    if current_user.role == UserRole.STUDENT:
+        assigned_result = await session.execute(
+            select(StudentQuest.student_quest_id)
+            .join(Enrollment, StudentQuest.enrollment_id == Enrollment.enrollment_id)
+            .where(
+                StudentQuest.quest_id == quest_id,
+                Enrollment.student_id == current_user.user_id,
+                Enrollment.course_id == course_id,
+                Quest.status == QuestStatus.SENT,
+            ),
+        )
+        if assigned_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="퀘스트를 찾을 수 없습니다.")
 
     questions = []
     for question in sorted(quest.questions, key=lambda item: item.question_order):
