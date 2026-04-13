@@ -120,6 +120,17 @@ Back/
 - 학생 제출 및 자동 채점
 - XP 지급 및 등급 갱신
 - AI 퀘스트 초안 생성
+- 완료 퀘스트 `completed` 상태 반환 및 중복 제출 차단
+
+### 학생 성장 데이터
+
+- 신규 수강생은 C등급, 0 XP에서 시작
+- C등급: 0~599 누적 XP
+- B등급: 600~1199 누적 XP
+- A등급: 1200 XP 이상이며 최고 등급
+- `GET /courses/{course_id}/me/stats`는 등급 내 진행 XP와 누적 XP를 함께 반환
+- 퀘스트 오답과 채팅 기반 취약 개념을 AI 오답노트로 조회
+- 오답노트는 문항, 내 답, 정답, 해설, 관련 퀘스트 또는 자료 출처를 포함
 
 ### AI 자동 제안
 
@@ -179,12 +190,16 @@ Back/
 
 - `GET /courses/{course_id}/analytics`
 - `GET /courses/{course_id}/analytics/keywords`
+- `GET /courses/{course_id}/analytics/students`
 - `GET /courses/{course_id}/ai-proposals`
 - `GET /courses/{course_id}/ai-config`
 - `PUT /courses/{course_id}/ai-config`
 - `GET /courses/{course_id}/me/stats`
 - `GET /courses/{course_id}/me/weak-points`
 - `GET /courses/{course_id}/notifications`
+- `PATCH /courses/{course_id}/notifications/{notification_id}/read`
+- `PATCH /courses/{course_id}/notifications/read-all`
+- `POST /courses/{course_id}/quiz/submit`
 
 ## 환경 변수
 
@@ -242,7 +257,7 @@ http://127.0.0.1:8000/health/db
 
 ## 데이터베이스 추가 컬럼
 
-기본 17개 테이블 외에 현재 백엔드 기능을 위해 다음 컬럼이 필요합니다.
+기본 17개 테이블 외에 현재 백엔드 기능을 위해 다음 컬럼과 보조 테이블이 필요합니다.
 
 ```sql
 ALTER TABLE enrollments
@@ -259,7 +274,43 @@ ADD COLUMN embedding_dim INT NULL;
 
 CREATE INDEX idx_course_documents_course_id_deleted
 ON course_documents(course_id, deleted_at);
+
+CREATE TABLE IF NOT EXISTS notification_reads (
+    notification_read_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    course_id BIGINT NOT NULL,
+    notification_key VARCHAR(64) NOT NULL,
+    read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_notification_read_user_course_key (
+        user_id,
+        course_id,
+        notification_key
+    ),
+    KEY idx_notification_reads_user_course (user_id, course_id),
+    FOREIGN KEY (user_id) REFERENCES users(user_id),
+    FOREIGN KEY (course_id) REFERENCES courses(course_id)
+);
+
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+    quiz_attempt_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    course_id BIGINT NOT NULL,
+    enrollment_id BIGINT NOT NULL,
+    message_key VARCHAR(64) NOT NULL,
+    selected_index INT NOT NULL,
+    is_correct BOOLEAN NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_quiz_attempt_enrollment_course_message (
+        enrollment_id,
+        course_id,
+        message_key
+    ),
+    KEY idx_quiz_attempts_course_enrollment (course_id, enrollment_id),
+    FOREIGN KEY (course_id) REFERENCES courses(course_id),
+    FOREIGN KEY (enrollment_id) REFERENCES enrollments(enrollment_id)
+);
 ```
+
+`notification_reads`와 `quiz_attempts`는 앱 시작 시 없으면 자동 생성됩니다.
 
 ## 보안 정책
 
@@ -281,6 +332,13 @@ ON course_documents(course_id, deleted_at);
 - RAG 채팅 답변 및 출처 반환
 - 퀘스트 생성, 수정, 발송, 제출, 채점
 - 신규 수강생 C등급 시작 및 XP 기반 등급 갱신
+- A/B/C 등급 기준 및 등급 내 XP 진행도 반환
+- 퀘스트 완료 상태 반환 및 중복 제출 방지
+- 알림 읽음 상태 DB 저장
+- AI 오답노트 문항/내 답/정답/해설 반환
+- 채팅 퀴즈 결과 저장 및 통계 반영
+- AI 퀘스트 초안 생성 시 주차별 자료 필터링
+- Cloudflare Tunnel을 통한 HTTPS 프론트 연동
 
 ## 배포 메모
 
