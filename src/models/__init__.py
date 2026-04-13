@@ -3,6 +3,7 @@ from src.auth.models import User
 from src.chat.models import ChatMessage, ChatMessageSource, ChatSession
 from src.course_messages.models import CourseMessage
 from src.courses.models import Course
+from src.dashboard.models import NotificationRead, QuizAttempt
 from src.documents.models import CourseDocument, DocumentChunk
 from src.enrollments.models import Enrollment, WeakConcept
 from src.interventions.models import AIIntervention
@@ -52,7 +53,9 @@ __all__ = [
     "InterventionStatus",
     "InterventionType",
     "MessageType",
+    "NotificationRead",
     "QuestionType",
+    "QuizAttempt",
     "Quest",
     "QuestCreatorType",
     "QuestQuestion",

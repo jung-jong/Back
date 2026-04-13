@@ -10,7 +10,17 @@ from sqlalchemy.orm import selectinload
 from database.database import get_db_session
 from dependencies.dependency import get_current_user
 from src.ai.service import AIService
-from src.models import Course, CourseDocument, Enrollment, Quest, QuestQuestion, QuestQuestionChoice, StudentQuest, User
+from src.models import (
+    Course,
+    CourseDocument,
+    DocumentChunk,
+    Enrollment,
+    Quest,
+    QuestQuestion,
+    QuestQuestionChoice,
+    StudentQuest,
+    User,
+)
 from src.models.enums import (
     Difficulty,
     QuestionType,
@@ -64,6 +74,7 @@ class QuestQuestionRequest(BaseModel):
 class QuestRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     scope: str | None = None
+    week: str | None = None
     difficulty: str | None = "보통"
     questionCount: int = Field(default=1, ge=1, le=20)
     targetGroup: str | None = None
@@ -86,6 +97,7 @@ class QuestSubmitRequest(BaseModel):
 class QuestAIDraftRequest(BaseModel):
     title: str | None = None
     scope: str | None = None
+    week: str | None = None
     difficulty: str | None = "보통"
     questionCount: int = Field(default=5, ge=1, le=20)
     targetGroup: str | None = "전체 수강생"
@@ -381,20 +393,45 @@ async def create_ai_quest_draft(
     session: AsyncSession = Depends(get_db_session),
 ) -> dict:
     course = await get_instructor_course(session, course_id, current_user)
+    week_start, _ = parse_scope_weeks(payload.week)
+    document_query = select(CourseDocument).where(
+        CourseDocument.course_id == course_id,
+        CourseDocument.deleted_at.is_(None),
+    )
+    if week_start is not None:
+        document_query = document_query.where(CourseDocument.week_number == week_start)
     documents_result = await session.execute(
-        select(CourseDocument.title, CourseDocument.week_number, CourseDocument.topic)
-        .where(CourseDocument.course_id == course_id, CourseDocument.deleted_at.is_(None))
-        .order_by(CourseDocument.uploaded_at.desc())
+        document_query.order_by(CourseDocument.uploaded_at.desc())
         .limit(8),
     )
+    document_rows = documents_result.scalars().all()
     documents = [
         {
-            "title": row.title,
-            "week": row.week_number,
-            "topic": row.topic,
+            "title": document.title,
+            "week": document.week_number,
+            "topic": document.topic,
         }
-        for row in documents_result.all()
+        for document in document_rows
     ]
+    document_ids = [document.course_document_id for document in document_rows]
+    chunk_snippets = []
+    if document_ids:
+        chunks_result = await session.execute(
+            select(DocumentChunk, CourseDocument)
+            .join(CourseDocument, DocumentChunk.course_document_id == CourseDocument.course_document_id)
+            .where(DocumentChunk.course_document_id.in_(document_ids))
+            .order_by(DocumentChunk.created_at.desc())
+            .limit(10),
+        )
+        chunk_snippets = [
+            {
+                "document": document.title,
+                "page": chunk.page_start,
+                "text": (chunk.chunk_text_preview or "")[:700],
+            }
+            for chunk, document in chunks_result.all()
+            if (chunk.chunk_text_preview or "").strip()
+        ]
     system_prompt = (
         "You create editable multiple-choice quiz drafts for instructors. "
         "Return only strict JSON. Do not include markdown. "
@@ -412,7 +449,9 @@ async def create_ai_quest_draft(
         f"Question count: {payload.questionCount}\n"
         f"Option count per question: {payload.optionCount}\n"
         f"Instructor note: {payload.description or ''}\n"
+        f"Selected week: {payload.week or 'all weeks'}\n"
         f"Uploaded document summaries: {documents}\n"
+        f"Reference snippets: {chunk_snippets}\n"
         "Write the quiz in Korean. Make plausible but clearly distinguishable wrong options."
     )
 
@@ -645,6 +684,9 @@ async def submit_course_quest(
     student_quest = result.scalar_one_or_none()
     if student_quest is None:
         raise HTTPException(status_code=404, detail="할당된 퀘스트를 찾을 수 없습니다.")
+
+    if student_quest.status in {StudentQuestStatus.SUBMITTED, StudentQuestStatus.GRADED}:
+        raise HTTPException(status_code=409, detail="이미 제출한 퀘스트입니다.")
 
     submitted = {}
     for key, value in payload.answers.items():

@@ -13,11 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from webapp.routers.router import api_router
 from core.config import settings
 from database.database import get_db_session
+from database.runtime_tables import ensure_runtime_tables
 from src.interventions.scheduler import WeeklyInterventionScheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await ensure_runtime_tables()
     scheduler: WeeklyInterventionScheduler | None = None
     if settings.weekly_intervention_scheduler_enabled:
         scheduler = WeeklyInterventionScheduler()
