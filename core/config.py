@@ -10,6 +10,15 @@ class Settings(BaseSettings):
     app_name: str = "Custom-TA API"
     app_env: str = "local"
     debug: bool = Field(default=True, alias="APP_DEBUG")
+    cors_allow_origins: str = Field(
+        default=(
+            "http://localhost:5173,"
+            "http://127.0.0.1:5173,"
+            "http://172.20.10.7:5173,"
+            "https://custom-ta.vercel.app"
+        ),
+        alias="CORS_ALLOW_ORIGINS",
+    )
 
     database_url: str = Field(..., alias="DATABASE_URL")
     database_ssl: bool = Field(default=True, alias="DATABASE_SSL")
@@ -99,6 +108,14 @@ class Settings(BaseSettings):
         if not self.database_ssl:
             return {}
         return {"ssl": ssl.create_default_context()}
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.cors_allow_origins.split(",")
+            if origin.strip()
+        ]
 
 
 @lru_cache
