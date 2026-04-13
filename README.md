@@ -10,6 +10,14 @@ Custom-TA는 강의 자료를 기반으로 학생 질문에 답변하고, 학습
 - 교강사 대시보드에 보충 퀘스트, 동기부여 메시지, 추가 자료 업로드 제안 제공
 - 추후 모델과 저장소를 교체하기 쉽도록 AI, Storage, DB 계층을 분리
 
+## AI 협업 산출물
+
+본 프로젝트는 공모전 심사 기준에 맞춰 AI와의 기획, 설계, 구현 협업 과정을 문서로 남겼습니다.
+
+- `docs/AI_COLLABORATION_GUIDE.md`: AI 개발 에이전트 협업 지침서
+- `docs/PRODUCT_REQUIREMENTS.md`: 제품 기획 및 기능 정의서
+- `docs/AI_DEVELOPMENT_LOG.md`: AI 협업 개발 로그
+
 ## 기술 스택
 
 | 영역 | 사용 기술 |
