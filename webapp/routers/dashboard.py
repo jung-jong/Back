@@ -1,3 +1,4 @@
+from collections import Counter
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.database import get_db_session
 from dependencies.dependency import get_current_user
+from src.analytics.keyword_stat_service import extract_question_keywords
 from src.models import (
     AIIntervention,
     ChatMessage,
@@ -64,6 +66,15 @@ async def get_active_student_enrollment(
 
 def notification_key(notification_id: str) -> str:
     return notification_id.strip()[:64]
+
+
+def rank_progress(total_xp: int) -> tuple[str, int, int, int]:
+    if total_xp >= 1200:
+        return "A", 600, 0, total_xp
+    if total_xp >= 600:
+        progress = total_xp - 600
+        return "B", progress, max(600 - progress, 0), total_xp
+    return "C", total_xp, max(600 - total_xp, 0), total_xp
 
 
 async def mark_notification_read(
@@ -144,12 +155,6 @@ async def get_course_analytics(
             {"name": "A 등급", "value": rank_counts.get("A", 0), "color": colors["A"]},
             {"name": "B 등급", "value": rank_counts.get("B", 0), "color": colors["B"]},
             {"name": "C 등급", "value": rank_counts.get("C", 0), "color": colors["C"]},
-            *[{
-                "name": f"{getattr(rank, 'value', rank or 'C')} 등급",
-                "value": int(count or 0),
-                "color": colors.get(getattr(rank, "value", str(rank)), "#7fd9d9"),
-            }
-            for rank, count in []],
         ],
     }
 
@@ -168,7 +173,30 @@ async def get_course_keywords(
         if digits:
             query = query.where(CourseKeywordStat.week_number == int(digits))
     result = await session.execute(query.order_by(CourseKeywordStat.mention_count.desc()).limit(20))
-    return [{"keyword": stat.keyword, "count": stat.mention_count} for stat in result.scalars().all()]
+    stats = result.scalars().all()
+    if not stats and week:
+        fallback_result = await session.execute(
+            select(CourseKeywordStat)
+            .where(CourseKeywordStat.course_id == course_id)
+            .order_by(CourseKeywordStat.mention_count.desc())
+            .limit(20),
+        )
+        stats = fallback_result.scalars().all()
+    if stats:
+        return [{"keyword": stat.keyword, "count": stat.mention_count} for stat in stats]
+
+    recent_questions_result = await session.execute(
+        select(ChatMessage.message_text)
+        .join(ChatSession, ChatMessage.chat_session_id == ChatSession.chat_session_id)
+        .join(Enrollment, ChatSession.enrollment_id == Enrollment.enrollment_id)
+        .where(Enrollment.course_id == course_id, ChatMessage.sender_type == SenderType.STUDENT)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(200),
+    )
+    counter: Counter[str] = Counter()
+    for question_text in recent_questions_result.scalars().all():
+        counter.update(extract_question_keywords(question_text, limit=5))
+    return [{"keyword": keyword, "count": count} for keyword, count in counter.most_common(20)]
 
 
 @router.get("/analytics/students")
@@ -302,7 +330,7 @@ async def get_my_course_stats(
         ).where(QuizAttempt.enrollment_id == enrollment.enrollment_id),
     )
     quiz_score, quiz_total = quiz_result.one()
-    xp = enrollment.current_xp or 0
+    grade, xp, xp_to_next, total_xp = rank_progress(enrollment.current_xp or 0)
     accuracy_total = int(quest_total or 0) + int(quiz_total or 0)
     accuracy_score = int(quest_score or 0) + int(quiz_score or 0)
     return {
@@ -310,9 +338,10 @@ async def get_my_course_stats(
         "quizAccuracy": round((accuracy_score / accuracy_total * 100) if accuracy_total else 0),
         "completedQuests": completed,
         "totalQuests": total,
-        "grade": getattr(enrollment.current_rank, "value", "C"),
+        "grade": grade,
         "xp": xp,
-        "xpToNext": max(600 - xp, 0),
+        "xpToNext": xp_to_next,
+        "totalXp": total_xp,
     }
 
 

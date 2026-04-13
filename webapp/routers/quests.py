@@ -173,6 +173,21 @@ async def quest_response(session: AsyncSession, quest: Quest, current_user: User
 
     ordered_questions = sorted(quest.questions or [], key=lambda item: item.question_order)
     preview = ordered_questions[0].question_text if ordered_questions else quest.description or ""
+    questions = []
+    for question in ordered_questions:
+        choices = sorted(question.choices or [], key=lambda item: item.choice_order)
+        if question.question_type == QuestionType.MULTIPLE_CHOICE:
+            answer = next((index for index, choice in enumerate(choices) if choice.is_correct), 0)
+            questions.append(
+                {
+                    "id": f"qq-{question.quest_question_id}",
+                    "type": "multiple",
+                    "question": question.question_text,
+                    "options": [choice.choice_text for choice in choices],
+                    "answer": answer,
+                    "hint": question.explanation,
+                },
+            )
     return {
         "id": str(quest.quest_id),
         "title": quest.title,
@@ -187,6 +202,7 @@ async def quest_response(session: AsyncSession, quest: Quest, current_user: User
         "deadline": "",
         "xp": quest.xp_reward or 0,
         "description": quest.description,
+        "questions": questions,
         "completed": completed,
     }
 
