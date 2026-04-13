@@ -348,13 +348,100 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
 - AI 퀘스트 초안 생성 시 주차별 자료 필터링
 - Cloudflare Tunnel을 통한 HTTPS 프론트 연동
 
-## 배포 메모
+## 현재 배포 구성
 
-운영 배포 전에는 다음 설정을 권장합니다.
+현재 백엔드는 AWS EC2 인스턴스에서 FastAPI 애플리케이션으로 실행되고 있습니다.
+프론트엔드는 Vercel에 배포되어 있으며, 브라우저의 HTTPS 요청을 처리하기 위해 Cloudflare Tunnel을 통해 백엔드 HTTPS 엔드포인트를 제공합니다.
+
+```text
+Vercel Frontend
+https://custom-ta.vercel.app
+        |
+        | HTTPS API request
+        v
+Cloudflare Tunnel
+https://scheduled-cars-nest-warranty.trycloudflare.com
+        |
+        | forwards to
+        v
+AWS EC2 Ubuntu Server
+FastAPI / Uvicorn / systemd
+http://127.0.0.1:8000
+        |
+        +-- TiDB Cloud
+        +-- AWS S3
+        +-- Gemini API
+```
+
+### EC2 서비스 실행 방식
+
+FastAPI 서버는 EC2 내부에서 systemd 서비스로 실행합니다.
+
+```bash
+sudo systemctl status custom-ta
+sudo systemctl restart custom-ta
+journalctl -u custom-ta -f
+```
+
+서비스 실행 명령은 다음과 같습니다.
+
+```bash
+/home/ubuntu/Back/.venv/bin/uvicorn webapp.main:app --host 0.0.0.0 --port 8000
+```
+
+### Cloudflare Tunnel
+
+Cloudflare Tunnel은 EC2 내부의 `127.0.0.1:8000`으로 들어오는 FastAPI 서버를 외부 HTTPS 주소로 노출합니다.
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+
+터널은 `tmux` 세션에서 유지합니다.
+
+```bash
+tmux ls
+tmux attach -t tunnel
+```
+
+터널 화면에서 빠져나올 때는 서버를 끄지 않고 detach합니다.
+
+```text
+Ctrl + B
+D
+```
+
+### 프론트엔드 환경변수
+
+Vercel 프론트엔드는 아래 환경변수로 백엔드 API 주소를 바라봅니다.
+
+```env
+VITE_API_BASE_URL=https://scheduled-cars-nest-warranty.trycloudflare.com
+```
+
+### 배포 반영 절차
+
+GitHub `main` 브랜치에 변경사항을 push한 뒤, EC2에서 다음 명령으로 최신 코드를 반영합니다.
+
+```bash
+cd ~/Back
+git pull origin main
+sudo systemctl restart custom-ta
+sudo systemctl status custom-ta
+```
+
+정상 동작 확인:
+
+```bash
+curl https://scheduled-cars-nest-warranty.trycloudflare.com/health
+```
+
+### 운영 전환 시 권장 사항
 
 - Google Cloud 또는 AI Studio 예산 알림 설정
 - AWS Budget 알림 설정
 - S3 IAM 권한을 특정 버킷의 `uploads/*`로 제한
+- Cloudflare quick tunnel 대신 named tunnel 또는 고정 도메인 적용
 - `WEEKLY_INTERVENTION_INTERVAL_SECONDS=604800`
 - `APP_DEBUG=false`
 - 충분히 긴 `JWT_SECRET_KEY` 사용
