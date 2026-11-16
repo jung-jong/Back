@@ -1,6 +1,4 @@
 from datetime import datetime
-import json
-import math
 import re
 
 import httpx
@@ -18,6 +16,7 @@ from src.analytics.keyword_stat_service import upsert_course_keyword_stats
 from src.analytics.weak_concept_service import extract_weak_concepts, upsert_weak_concepts
 from src.models import ChatMessage, ChatMessageSource, ChatSession, Course, CourseDocument, DocumentChunk, Enrollment, User
 from src.models.enums import EnrollmentStatus, MessageType, RecentSourceType, SenderType, UserRole
+from src.vectorstore import get_vector_store
 from webapp.routers.courses import get_course_for_user
 
 router = APIRouter(prefix="/courses/{course_id}/chat", tags=["chat"])
@@ -78,17 +77,7 @@ async def retrieve_local_contexts(session: AsyncSession, question: str, course_i
     return [context for context in contexts[: settings.rag_top_k] if context.text.strip()]
 
 
-def cosine_similarity(left: list[float], right: list[float]) -> float:
-    if len(left) != len(right):
-        return 0.0
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
-    if left_norm == 0 or right_norm == 0:
-        return 0.0
-    return sum(a * b for a, b in zip(left, right, strict=True)) / (left_norm * right_norm)
-
-
-async def retrieve_tidb_vector_contexts(
+async def retrieve_vector_contexts(
     session: AsyncSession,
     ai_service: AIService,
     question: str,
@@ -97,38 +86,17 @@ async def retrieve_tidb_vector_contexts(
     query_embedding = (
         await ai_service.embed_texts([question], task_type="RETRIEVAL_QUERY")
     )[0]
-    result = await session.execute(
-        select(DocumentChunk, CourseDocument)
-        .join(CourseDocument, DocumentChunk.course_document_id == CourseDocument.course_document_id)
-        .where(
-            CourseDocument.course_id == course_id,
-            CourseDocument.deleted_at.is_(None),
-            DocumentChunk.embedding_json.is_not(None),
-        ),
+    hits = await get_vector_store().search(
+        session,
+        query_embedding,
+        course_id=course_id,
+        top_k=settings.rag_top_k,
     )
-    contexts = []
-    for chunk, document in result.all():
-        try:
-            chunk_embedding = json.loads(chunk.embedding_json or "[]")
-        except json.JSONDecodeError:
-            continue
-        score = cosine_similarity(query_embedding, chunk_embedding)
-        contexts.append(
-            RetrievedContext(
-                text=chunk.chunk_text_preview or "",
-                metadata={
-                    "course_id": course_id,
-                    "course_document_id": document.course_document_id,
-                    "document_chunk_id": chunk.document_chunk_id,
-                    "page_start": chunk.page_start,
-                    "page_end": chunk.page_end,
-                    "title": document.title,
-                },
-                score=score,
-            ),
-        )
-    contexts.sort(key=lambda item: item.score or 0, reverse=True)
-    return [context for context in contexts[: settings.rag_top_k] if context.text.strip()]
+    return [
+        RetrievedContext(text=hit.text, metadata=hit.metadata(), score=hit.score)
+        for hit in hits
+        if hit.text.strip()
+    ]
 
 
 async def source_labels(session: AsyncSession, chat_message_id: int) -> list[str]:
@@ -204,7 +172,7 @@ async def send_chat_message(
     ai_service = AIService()
     try:
         if settings.local_rag_enabled and ai_service.is_embedding_provider_configured:
-            contexts = await retrieve_tidb_vector_contexts(session, ai_service, payload.content, course_id)
+            contexts = await retrieve_vector_contexts(session, ai_service, payload.content, course_id)
             if not contexts:
                 contexts = await retrieve_local_contexts(session, payload.content, course_id)
         else:

@@ -1,0 +1,29 @@
+# Qdrant for Custom-TA on the EC2 host.
+# Install: see docs/DEPLOY_QDRANT.md, then
+#   sudo cp deploy/qdrant.service /etc/systemd/system/qdrant.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now qdrant
+#
+# Listens on 127.0.0.1 only, so it is reachable from the FastAPI process on
+# this host and not from the internet. Do not open port 6333 in the security
+# group; if you ever need remote access, set QDRANT__SERVICE__API_KEY first.
+
+[Unit]
+Description=Qdrant vector database for Custom-TA
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/qdrant
+ExecStart=/home/ubuntu/qdrant/qdrant
+Environment=QDRANT__SERVICE__HOST=127.0.0.1
+Environment=QDRANT__SERVICE__HTTP_PORT=6333
+Environment=QDRANT__SERVICE__GRPC_PORT=6334
+Environment=QDRANT__STORAGE__STORAGE_PATH=/home/ubuntu/qdrant/storage
+Environment=QDRANT__STORAGE__SNAPSHOTS_PATH=/home/ubuntu/qdrant/snapshots
+Environment=QDRANT__TELEMETRY_DISABLED=true
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

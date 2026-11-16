@@ -15,6 +15,7 @@ from core.config import settings
 from database.database import get_db_session
 from database.runtime_tables import ensure_runtime_tables
 from src.interventions.scheduler import WeeklyInterventionScheduler
+from src.vectorstore import get_vector_store
 
 
 @asynccontextmanager
@@ -89,3 +90,16 @@ async def database_health_check(
 ) -> dict[str, str | int]:
     result = await session.execute(text("SELECT 1"))
     return {"status": "ok", "result": result.scalar_one()}
+
+
+@app.get("/health/vector-store")
+async def vector_store_health_check() -> dict[str, str | int]:
+    store = get_vector_store()
+    info: dict[str, str | int] = {"status": "ok", "vector_store": store.name}
+    count = getattr(store, "count", None)
+    if count is not None:
+        try:
+            info["points"] = await count()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"벡터 저장소에 연결할 수 없습니다: {exc}") from exc
+    return info

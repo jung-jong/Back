@@ -23,6 +23,7 @@ from src.documents.service import DocumentProcessingService
 from src.documents.storage import get_storage_service, remove_stored_file, stored_file_url
 from src.models import CourseDocument, User
 from src.models.enums import DocumentCategory, EmbeddingStatus, UserRole
+from src.vectorstore import get_vector_store
 from webapp.routers.courses import get_course_for_user
 
 router = APIRouter(prefix="/courses/{course_id}/files", tags=["files"])
@@ -197,6 +198,9 @@ async def delete_course_file(
     document = await session.get(CourseDocument, file_id)
     if document is None or document.course_id != course_id:
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
+    # Vectors go first: if this fails the file is still listed and can be retried,
+    # whereas a deleted file with live vectors would keep showing up in answers.
+    await get_vector_store().delete_document(session, document.course_document_id)
     document.deleted_at = datetime.utcnow()
     await session.commit()
     remove_stored_file(document.storage_path)

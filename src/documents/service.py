@@ -1,5 +1,4 @@
 from io import BytesIO
-import json
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
@@ -11,11 +10,17 @@ from src.ai.service import AIService, VectorDocument
 from src.documents.storage import read_stored_file_bytes
 from src.models import CourseDocument, DocumentChunk
 from src.models.enums import EmbeddingStatus
+from src.vectorstore import VectorRecord, VectorStore, get_vector_store
 
 
 class DocumentProcessingService:
-    def __init__(self, ai_service: AIService | None = None) -> None:
+    def __init__(
+        self,
+        ai_service: AIService | None = None,
+        vector_store: VectorStore | None = None,
+    ) -> None:
         self.ai_service = ai_service or AIService()
+        self.vector_store = vector_store or get_vector_store()
 
     async def process_course_document(self, course_document_id: int) -> None:
         async with get_sessionmaker()() as session:
@@ -39,6 +44,8 @@ class DocumentProcessingService:
                         DocumentChunk.course_document_id == course_document_id,
                     ),
                 )
+                # Re-processing replaces the chunks, so drop their old vectors too.
+                await self.vector_store.delete_document(session, course_document_id)
 
                 chunks = self._split_pages(pages)
                 chunk_models = [
@@ -77,18 +84,27 @@ class DocumentProcessingService:
                         [document.text for document in vector_documents],
                         task_type="RETRIEVAL_DOCUMENT",
                     )
-                    chunks_by_vector_id = {
-                        chunk.vector_id: chunk
-                        for chunk in chunk_models
-                        if chunk.vector_id is not None
-                    }
+                    records = []
                     for vector_document, embedding in zip(vector_documents, embeddings, strict=True):
-                        chunk = chunks_by_vector_id.get(vector_document.id)
-                        if chunk is None:
-                            continue
-                        chunk.embedding_json = json.dumps(embedding)
+                        metadata = vector_document.metadata
+                        records.append(
+                            VectorRecord(
+                                document_chunk_id=metadata["document_chunk_id"],
+                                course_id=metadata["course_id"],
+                                course_document_id=metadata["course_document_id"],
+                                embedding=embedding,
+                                text=vector_document.text,
+                                title=metadata["title"],
+                                page_start=metadata["page_start"],
+                                page_end=metadata["page_end"],
+                                embedding_model=self.ai_service.embedding_model_name,
+                            ),
+                        )
+                    for chunk, embedding in zip(chunk_models, embeddings, strict=True):
                         chunk.embedding_model = self.ai_service.embedding_model_name
                         chunk.embedding_dim = len(embedding)
+                    await session.flush()
+                    await self.vector_store.upsert(session, records)
 
                 if not settings.local_rag_enabled:
                     document.embedding_status = EmbeddingStatus.FAILED
@@ -98,6 +114,11 @@ class DocumentProcessingService:
                 await session.commit()
             except Exception:
                 await session.rollback()
+                # The chunk rows are rolled back, so their vectors must not outlive them.
+                try:
+                    await self.vector_store.delete_document(session, course_document_id)
+                except Exception:
+                    pass
                 document.embedding_status = EmbeddingStatus.FAILED
                 session.add(document)
                 await session.commit()

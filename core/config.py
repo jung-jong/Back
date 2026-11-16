@@ -75,6 +75,19 @@ class Settings(BaseSettings):
     rag_chunk_overlap: int = Field(default=200, alias="RAG_CHUNK_OVERLAP")
     rag_top_k: int = Field(default=5, alias="RAG_TOP_K")
 
+    # "qdrant" searches a Qdrant collection; "tidb_json" is the original
+    # brute-force search over document_chunks.embedding_json.
+    vector_store: str = Field(default="tidb_json", alias="VECTOR_STORE")
+    embedding_dimension: int = Field(default=768, alias="EMBEDDING_DIMENSION")
+    qdrant_url: str | None = Field(default=None, alias="QDRANT_URL")
+    qdrant_api_key: str | None = Field(default=None, alias="QDRANT_API_KEY")
+    qdrant_collection: str = Field(default="custom_ta_chunks", alias="QDRANT_COLLECTION")
+    qdrant_hnsw_ef: int | None = Field(default=None, alias="QDRANT_HNSW_EF")
+    qdrant_local_path: Path = Field(
+        default=Path("static/vector_store/qdrant"),
+        alias="QDRANT_LOCAL_PATH",
+    )
+
     weekly_intervention_scheduler_enabled: bool = Field(
         default=False,
         alias="WEEKLY_INTERVENTION_SCHEDULER_ENABLED",

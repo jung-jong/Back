@@ -28,12 +28,12 @@ Custom-TA는 강의 자료를 기반으로 학생 질문에 답변하고, 학습
 | LLM | Gemini 2.5 Flash-Lite |
 | Embedding | Gemini Embedding 001 |
 | File Storage | AWS S3, Presigned URL |
-| RAG 저장 | TiDB `document_chunks.embedding_json` |
+| Vector Store | Qdrant (`VECTOR_STORE=qdrant`), 기존 TiDB JSON 방식도 선택 가능 |
 | Auth | JWT Bearer Token |
 
 ## RAG 동작 구조
 
-현재 RAG는 Pinecone 없이 S3, TiDB, Gemini만으로 동작합니다.
+임베딩은 Qdrant 컬렉션에 저장하고, 강의 ID 필터를 건 벡터 검색으로 Top-K를 가져옵니다. 초기 버전은 TiDB 컬럼에 임베딩을 JSON으로 저장하고 Python에서 전수 비교했으며, 이 방식은 `VECTOR_STORE=tidb_json`으로 계속 쓸 수 있습니다. 전환 배경과 측정 결과는 [docs/VECTOR_STORE.md](docs/VECTOR_STORE.md)에 있습니다.
 
 ```text
 PDF 업로드
@@ -42,12 +42,11 @@ PDF 업로드
 → 페이지 텍스트 추출
 → 텍스트 chunk 생성
 → Gemini Embedding으로 chunk 벡터 생성
-→ TiDB document_chunks.embedding_json에 저장
+→ Qdrant 컬렉션에 벡터와 chunk 본문·출처 정보 저장
 
 학생 질문
 → 질문을 Gemini Embedding으로 벡터화
-→ TiDB에서 해당 강의 chunk embedding 조회
-→ Python cosine similarity로 Top-K 검색
+→ Qdrant에서 해당 강의(course_id 필터)의 Top-K chunk 검색
 → 검색된 강의 자료를 Gemini 2.5 Flash-Lite에 전달
 → 답변과 출처를 chat_messages, chat_message_sources에 저장
 ```
@@ -371,7 +370,10 @@ http://127.0.0.1:8000
         +-- TiDB Cloud
         +-- AWS S3
         +-- Gemini API
+        +-- Qdrant (127.0.0.1:6333, VECTOR_STORE=qdrant일 때)
 ```
+
+Qdrant 설치·전환·되돌리기 절차는 [docs/DEPLOY_QDRANT.md](docs/DEPLOY_QDRANT.md)에 있습니다.
 
 ### EC2 서비스 실행 방식
 
